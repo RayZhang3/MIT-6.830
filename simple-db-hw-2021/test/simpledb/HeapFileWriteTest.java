@@ -58,7 +58,7 @@ public class HeapFileWriteTest extends TestUtil.CreateHeapFile {
         // Grab table id
         int tableId = smallFile.getId();
         int tdSize = 8;
-        int numTuples = (BufferPool.getPageSize()*8) / (tdSize * 8 + 1);
+        int numTuples = (int) ((BufferPool.getPageSize()* 8.0) / (tdSize * 8.0 + 1.0));
         int headerSize = (int) Math.ceil(numTuples / 8.0);
         // Leave these as all zeroes so this entire page is empty
         byte[] empty = new byte[numTuples * 8 + headerSize];
