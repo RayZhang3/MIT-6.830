@@ -12,6 +12,9 @@ import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
+
+import java.util.Map;
+import java.util.HashMap;
 /**
  * The Catalog keeps track of all available tables in the database and their
  * associated schemas.
@@ -22,13 +25,26 @@ import java.util.concurrent.ConcurrentHashMap;
  * @Threadsafe
  */
 public class Catalog {
+    //Stores a list of all tables in the database
+    private static class Table{
+        private DbFile file;
+        private String name;
+        private String pKeyField;
 
+        public Table(DbFile file, String name, String pKeyField) {
+            this.file = file;
+            this.name = name;
+            this.pKeyField = pKeyField;
+        }
+    }
+
+    private Map<Integer, Table> tablesMap;
     /**
      * Constructor.
      * Creates a new, empty catalog.
      */
     public Catalog() {
-        // some code goes here
+        this.tablesMap = new HashMap<>();
     }
 
     /**
@@ -41,7 +57,16 @@ public class Catalog {
      * @param pkeyField the name of the primary key field
      */
     public void addTable(DbFile file, String name, String pkeyField) {
-        // some code goes here
+        // Duplicate name, remove the old one
+        Iterator<Map.Entry<Integer, Table>> iter = tablesMap.entrySet().iterator();
+        while (iter.hasNext()) {
+            Map.Entry<Integer, Table> entry = iter.next();
+            if (name.equals(entry.getValue().name)) {
+                iter.remove();
+            }
+        }
+        //Don't need to worry about Duplicate id
+        tablesMap.put(file.getId(), new Table(file, name, pkeyField));
     }
 
     public void addTable(DbFile file, String name) {
@@ -64,8 +89,15 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public int getTableId(String name) throws NoSuchElementException {
-        // some code goes here
-        return 0;
+        if (name == null || this.tablesMap == null) {
+            throw new NoSuchElementException();
+        }
+        for (Map.Entry<Integer, Table> entry : tablesMap.entrySet()) {
+            if (name.equals(entry.getValue().name)) {
+                return entry.getKey();
+            }
+        }
+        throw new NoSuchElementException();
     }
 
     /**
@@ -75,8 +107,10 @@ public class Catalog {
      * @throws NoSuchElementException if the table doesn't exist
      */
     public TupleDesc getTupleDesc(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        if (this.tablesMap == null || !tablesMap.containsKey(tableid)) {
+            throw new NoSuchElementException();
+        }
+        return tablesMap.get(tableid).file.getTupleDesc();
     }
 
     /**
@@ -86,28 +120,33 @@ public class Catalog {
      *     function passed to addTable
      */
     public DbFile getDatabaseFile(int tableid) throws NoSuchElementException {
-        // some code goes here
-        return null;
+        if (this.tablesMap == null || !tablesMap.containsKey(tableid)) {
+            throw new NoSuchElementException();
+        }
+        return tablesMap.get(tableid).file;
     }
 
     public String getPrimaryKey(int tableid) {
-        // some code goes here
-        return null;
+        if (this.tablesMap == null || !tablesMap.containsKey(tableid)) {
+            throw new NoSuchElementException();
+        }
+        return tablesMap.get(tableid).pKeyField;
     }
 
     public Iterator<Integer> tableIdIterator() {
-        // some code goes here
-        return null;
+        return tablesMap.keySet().iterator();
     }
 
     public String getTableName(int id) {
-        // some code goes here
-        return null;
+        if (tablesMap == null || !tablesMap.containsKey(id)) {
+            throw new NoSuchElementException();
+        }
+        return tablesMap.get(id).name;
     }
     
     /** Delete all tables from the catalog */
     public void clear() {
-        // some code goes here
+        this.tablesMap = new HashMap<Integer, Table>();
     }
     
     /**

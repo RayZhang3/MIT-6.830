@@ -1,5 +1,6 @@
 package simpledb.storage;
 
+import edu.princeton.cs.algs4.Heap;
 import simpledb.common.Database;
 import simpledb.common.DbException;
 import simpledb.common.Debug;
@@ -22,6 +23,11 @@ import java.util.*;
  */
 public class HeapFile implements DbFile {
 
+    private File file;
+    private RandomAccessFile rf;
+    private TupleDesc td;
+    private Iterator<Tuple> it;
+
     /**
      * Constructs a heap file backed by the specified file.
      * 
@@ -30,7 +36,14 @@ public class HeapFile implements DbFile {
      *            file.
      */
     public HeapFile(File f, TupleDesc td) {
-        // some code goes here
+        this.file = f;
+        this.td = td;
+        try{
+            this.rf = new RandomAccessFile(f, "rw");
+        } catch (FileNotFoundException e){
+            e.printStackTrace();
+        }
+        //TODO: iterator?
     }
 
     /**
@@ -39,8 +52,7 @@ public class HeapFile implements DbFile {
      * @return the File backing this HeapFile on disk.
      */
     public File getFile() {
-        // some code goes here
-        return null;
+        return this.file;
     }
 
     /**
@@ -53,8 +65,9 @@ public class HeapFile implements DbFile {
      * @return an ID uniquely identifying this HeapFile.
      */
     public int getId() {
-        // some code goes here
-        throw new UnsupportedOperationException("implement this");
+        // hashing the absolute file name of file (including path) underlying the heapFile
+        return file.getAbsoluteFile().hashCode();
+        //throw new UnsupportedOperationException("implement this");
     }
 
     /**
@@ -63,13 +76,41 @@ public class HeapFile implements DbFile {
      * @return TupleDesc of this DbFile.
      */
     public TupleDesc getTupleDesc() {
-        // some code goes here
-        throw new UnsupportedOperationException("implement this");
+        return this.td;
     }
 
     // see DbFile.java for javadocs
     public Page readPage(PageId pid) {
-        // some code goes here
+        if (pid.getTableId() != this.getId()) {
+            throw new NoSuchElementException();
+        }
+        FileInputStream fis = null;
+        try
+        {
+            fis = new FileInputStream(this.file);
+        } catch (FileNotFoundException e) {
+            e.printStackTrace();
+        }
+        int pageSize = BufferPool.getPageSize();
+        int pgNo = pid.getPageNumber();
+        int offSet = pageSize * pgNo;
+        long fileLength = this.file.length();
+        int size = Math.min((int) fileLength - offSet, pageSize);
+        byte[] pageData = new byte[size];
+        try
+        {
+            rf.seek(offSet);
+            rf.readFully(pageData);
+            return new HeapPage((HeapPageId) pid, pageData);
+        } catch (IOException e) {
+            e.printStackTrace();
+        } catch (IndexOutOfBoundsException e) {
+            System.out.println("fileLength: " + fileLength);
+            System.out.println("PageSize: " + pageSize);
+            System.out.println("PgNo: " + pgNo);
+            System.out.println("offSet: " + offSet);
+            System.out.println("size: " + offSet);
+        }
         return null;
     }
 
@@ -83,8 +124,7 @@ public class HeapFile implements DbFile {
      * Returns the number of pages in this HeapFile.
      */
     public int numPages() {
-        // some code goes here
-        return 0;
+        return (int) Math.ceil(file.length() * 1.0 / BufferPool.getPageSize());
     }
 
     // see DbFile.java for javadocs
@@ -104,9 +144,15 @@ public class HeapFile implements DbFile {
     }
 
     // see DbFile.java for javadocs
+    /**
+     * Returns an iterator over all the tuples stored in this DbFile. The
+     * iterator must use {@link BufferPool#getPage}, rather than
+     * {@link #readPage} to iterate through the pages.
+     *
+     * @return an iterator over all the tuples stored in this DbFile.
+     */
     public DbFileIterator iterator(TransactionId tid) {
-        // some code goes here
-        return null;
+        return new HeapFileIterator(this, tid);
     }
 
 }
