@@ -40,6 +40,10 @@ public class TupleIterator implements OpIterator {
     }
 
     public boolean hasNext() {
+        /*
+        if (i == null) {
+            System.out.println("i == null");
+        }*/
         return i.hasNext();
     }
 

@@ -90,14 +90,15 @@ public class HeapFileIterator implements DbFileIterator{
         }
         while (true) {
             if (PageIterator.hasNext()) {
-                //print
+
                 Tuple tuple = PageIterator.next();
-                System.out.print(tuple.toString() + ">>");
+                //print
+                // System.out.print(tuple.toString() + ">>");
                 return tuple;
             }
             currPage += 1;
             //print
-            System.out.println();
+            // System.out.println();
 
             if (currPage >= file.numPages()) {
                 PageIterator = null;

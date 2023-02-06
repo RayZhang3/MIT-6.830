@@ -1,14 +1,13 @@
 package simpledb.storage;
 
 import edu.princeton.cs.algs4.Heap;
-import simpledb.common.Database;
-import simpledb.common.DbException;
-import simpledb.common.Debug;
-import simpledb.common.Permissions;
+import simpledb.common.*;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
+import javax.xml.crypto.Data;
 import java.io.*;
+import java.nio.Buffer;
 import java.util.*;
 
 /**
@@ -116,8 +115,10 @@ public class HeapFile implements DbFile {
 
     // see DbFile.java for javadocs
     public void writePage(Page page) throws IOException {
-        // some code goes here
-        // not necessary for lab1
+        int offset = BufferPool.getPageSize() * page.getId().getPageNumber();
+        rf.seek(offset);
+        rf.write(page.getPageData());
+        page.markDirty(false, null);
     }
 
     /**
@@ -131,16 +132,55 @@ public class HeapFile implements DbFile {
     public List<Page> insertTuple(TransactionId tid, Tuple t)
             throws DbException, IOException, TransactionAbortedException {
         // some code goes here
-        return null;
-        // not necessary for lab1
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("Mismatch tupleDesc");
+        }
+        HeapPage page = null;
+        for (int i = 0; i < numPages(); i += 1) {
+            HeapPageId pid = new HeapPageId(this.getId(), i);
+            page = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
+            if (page.getNumEmptySlots() > 0) {
+                page.insertTuple(t);
+                List<Page> pages = new ArrayList<>();
+                pages.add(page);
+
+                writePage(page); // write page now?
+
+                return pages;
+            }
+        }
+        // if all the pages have no empty slots
+        byte[] pageData = HeapPage.createEmptyPageData();
+        HeapPageId newPid = new HeapPageId(this.getId(), numPages());
+        HeapPage appendPage = new HeapPage(newPid, pageData);
+        appendPage.insertTuple(t);
+
+        writePage(appendPage); // write page now?
+
+        List<Page> pages = new ArrayList<>();
+        pages.add(appendPage);
+        return pages;
     }
 
     // see DbFile.java for javadocs
     public ArrayList<Page> deleteTuple(TransactionId tid, Tuple t) throws DbException,
             TransactionAbortedException {
         // some code goes here
-        return null;
-        // not necessary for lab1
+        if (!t.getTupleDesc().equals(td)) {
+            throw new DbException("Mismatched tupleDesc");
+        }
+        if (this.getId() != t.getRecordId().getPageId().getTableId()) {
+            throw new DbException("Mismatched tableId");
+        }
+        HeapPage page = (HeapPage) Database.getBufferPool().getPage(tid, t.getRecordId().getPageId(), Permissions.READ_WRITE);
+        try {
+            page.deleteTuple(t);
+        } catch (DbException e) {
+            e.printStackTrace();
+        }
+        ArrayList<Page> pages = new ArrayList<>();
+        pages.add(page);
+        return pages;
     }
 
     // see DbFile.java for javadocs

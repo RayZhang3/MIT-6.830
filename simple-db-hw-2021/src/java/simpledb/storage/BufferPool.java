@@ -7,7 +7,9 @@ import simpledb.transaction.TransactionId;
 import java.io.*;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
@@ -33,8 +35,48 @@ public class BufferPool {
     public static final int DEFAULT_PAGES = 50;
 
     public static int numPages = DEFAULT_PAGES;
-    Map<PageId, Page> PagesMap;
+    Map<PageId, DlinkedNode> PagesMap;
+    DlinkedNode sentinel;
+    DlinkedNode endSentinel;
+    private class DlinkedNode {
+        PageId pid;
+        Page page;
+        DlinkedNode prev;
+        DlinkedNode next;
+        DlinkedNode(){};
+        DlinkedNode(PageId pid, Page page, DlinkedNode prev, DlinkedNode next) {
+            this.pid = pid;
+            this.page = page;
+            this.prev = prev;
+            this.next = next;
+        }
+        public PageId getPageId() {
+            return this.pid;
+        }
+        public Page getPage() {
+            return this.page;
+        }
 
+    }
+    public DlinkedNode deleteNode(DlinkedNode node) {
+        node.next.prev = node.prev;
+        node.prev.next = node.next;
+        return node;
+    }
+    public void addHeadNode(DlinkedNode node) {
+        node.prev = sentinel;
+        node.next = sentinel.next;
+        sentinel.next.prev = node;
+        sentinel.next = node;
+    }
+    public DlinkedNode removeFirst() {
+        DlinkedNode targetNode = sentinel.next;
+        return deleteNode(targetNode);
+    }
+    public void moveToFirst(DlinkedNode node) {
+        deleteNode(node);
+        addHeadNode(node);
+    }
 
     /**
      * Creates a BufferPool that caches up to numPages pages.
@@ -44,6 +86,10 @@ public class BufferPool {
     public BufferPool(int numPages) {
          this.PagesMap = new HashMap<>();
          this.numPages = numPages;
+         sentinel = new DlinkedNode();
+         endSentinel = new DlinkedNode();
+         sentinel.next = endSentinel;
+         endSentinel.prev = sentinel;
     }
     
     public static int getPageSize() {
@@ -78,17 +124,23 @@ public class BufferPool {
     public Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
-        if (!PagesMap.containsKey(pid)) {
+        if (PagesMap.containsKey(pid)) {
+            DlinkedNode node = PagesMap.get(pid);
+            moveToFirst(node);
+            return node.getPage();
+        } else {
             // The capacity is full
             if (PagesMap.size() >= numPages) {
-                throw new DbException("PagesMap Overflow");
-            } else {
-                DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
-                PagesMap.put(pid, file.readPage(pid));
-                return PagesMap.get(pid);
+                DlinkedNode target = sentinel.next;
+                deleteNode(target);
+                PagesMap.remove(target.getPageId());
             }
-        } else {
-            return PagesMap.get(pid);
+            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            Page page = file.readPage(pid);
+            DlinkedNode node = new DlinkedNode(pid, page, null, null);
+            addHeadNode(node);
+            PagesMap.put(pid, node);
+            return node.getPage();
         }
     }
 
@@ -152,8 +204,13 @@ public class BufferPool {
      */
     public void insertTuple(TransactionId tid, int tableId, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        DbFile file = Database.getCatalog().getDatabaseFile(tableId);
+        List<Page> dirtyPages = file.insertTuple(tid, t);
+        for (Page page: dirtyPages) {
+            DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
+            addHeadNode(node);
+            PagesMap.put(page.getId(), node);
+        }
     }
 
     /**
@@ -169,10 +226,15 @@ public class BufferPool {
      * @param tid the transaction deleting the tuple.
      * @param t the tuple to delete
      */
-    public  void deleteTuple(TransactionId tid, Tuple t)
+    public void deleteTuple(TransactionId tid, Tuple t)
         throws DbException, IOException, TransactionAbortedException {
-        // some code goes here
-        // not necessary for lab1
+        DbFile file = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
+        List<Page> dirtyPages = file.deleteTuple(tid, t);
+        for (Page page: dirtyPages) {
+            DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
+            addHeadNode(node);
+            PagesMap.put(page.getId(), node);
+        }
     }
 
     /**
@@ -181,9 +243,9 @@ public class BufferPool {
      *     break simpledb if running in NO STEAL mode.
      */
     public synchronized void flushAllPages() throws IOException {
-        // some code goes here
-        // not necessary for lab1
-
+        for (PageId pid: PagesMap.keySet()) {
+            flushPage(pid);
+        }
     }
 
     /** Remove the specific page id from the buffer pool.
@@ -195,33 +257,50 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
-        // some code goes here
-        // not necessary for lab1
+        if (!PagesMap.containsKey(pid)) {
+            throw new NoSuchElementException();
+        }
+        DlinkedNode targetNode = PagesMap.get(pid);
+        deleteNode(targetNode);
+        PagesMap.remove(pid);
     }
 
     /**
      * Flushes a certain page to disk
      * @param pid an ID indicating the page to flush
      */
-    private synchronized  void flushPage(PageId pid) throws IOException {
-        // some code goes here
-        // not necessary for lab1
+    private synchronized void flushPage(PageId pid) throws IOException {
+        DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+        Page targetPage = PagesMap.get(pid).getPage();
+        if (targetPage == null) {
+            throw new NoSuchElementException();
+        }
+        file.writePage(targetPage);
     }
 
     /** Write all pages of the specified transaction to disk.
      */
-    public synchronized  void flushPages(TransactionId tid) throws IOException {
-        // some code goes here
-        // not necessary for lab1|lab2
+    public synchronized void flushPages(TransactionId tid) throws IOException {
+        for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
+            Page page = entry.getValue().getPage();
+            if (page.isDirty().equals(tid)) {
+                flushPage(entry.getKey());
+            }
+        }
     }
 
     /**
      * Discards a page from the buffer pool.
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
-    private synchronized  void evictPage() throws DbException {
-        // some code goes here
-        // not necessary for lab1
+    private synchronized void evictPage() throws DbException {
+        DlinkedNode node = removeFirst();
+        try {
+            flushPage(node.getPageId());
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
+        PagesMap.remove(node);
     }
 
 }
