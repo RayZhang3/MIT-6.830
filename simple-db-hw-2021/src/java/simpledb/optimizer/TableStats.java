@@ -6,10 +6,9 @@ import simpledb.execution.Predicate;
 import simpledb.execution.SeqScan;
 import simpledb.storage.*;
 import simpledb.transaction.Transaction;
+import simpledb.transaction.TransactionId;
 
-import java.util.HashMap;
-import java.util.Iterator;
-import java.util.Map;
+import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -24,7 +23,14 @@ public class TableStats {
     private static final ConcurrentMap<String, TableStats> statsMap = new ConcurrentHashMap<>();
 
     static final int IOCOSTPERPAGE = 1000;
-
+    private int tableid;
+    private int numPages;
+    private int ioCostPerPage;
+    private int numTuples;
+    private DbFile file;
+    private TupleDesc td;
+    private Map<Integer, IntHistogram> intHistogramMap;
+    private Map<Integer, StringHistogram> stringHistogramMap;
     public static TableStats getTableStats(String tablename) {
         return statsMap.get(tablename);
     }
@@ -87,6 +93,75 @@ public class TableStats {
         // necessarily have to (for example) do everything
         // in a single scan of the table.
         // some code goes here
+        this.tableid = tableid;
+        this.ioCostPerPage = ioCostPerPage;
+        this.file =  Database.getCatalog().getDatabaseFile(tableid);
+        this.numPages = ((HeapFile) file).numPages();
+        this.td = file.getTupleDesc();
+
+        int intFieldNum = 0;
+        int stringFieldNum = 0;
+        for (int i = 0; i < this.td.numFields(); i += 1) {
+            if (this.td.getFieldType(i) == Type.INT_TYPE) {
+                intFieldNum += 1;
+            } else if (this.td.getFieldType(i) == Type.STRING_TYPE) {
+                stringFieldNum += 1;
+            }
+        }
+        this.intHistogramMap = new HashMap<>(intFieldNum);
+        this.stringHistogramMap = new HashMap<>(stringFieldNum);
+        int[] minFieldValue = new int[this.td.numFields()];
+        int[] maxFieldValue = new int[this.td.numFields()];
+        Arrays.fill(minFieldValue, Integer.MAX_VALUE);
+        Arrays.fill(maxFieldValue, Integer.MIN_VALUE);
+
+        TransactionId tid = new TransactionId();
+        SeqScan ss1 = new SeqScan(tid, tableid);
+
+        int tuplesCount = 0;
+        try {
+            ss1.open();
+            while(ss1.hasNext()) {
+                Tuple tup = ss1.next();
+                tuplesCount += 1;
+                for (int i = 0; i < this.td.numFields(); i += 1) {
+                    if (td.getFieldType(i) == Type.INT_TYPE) {
+                        int value = ((IntField)tup.getField(i)).getValue();
+                        minFieldValue[i] = Math.min(minFieldValue[i], value);
+                        maxFieldValue[i] = Math.max(maxFieldValue[i], value);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
+        this.numTuples = tuplesCount;
+
+        for (int i = 0; i < this.td.numFields(); i += 1) {
+            if (td.getFieldType(i) == Type.INT_TYPE) {
+                this.intHistogramMap.put(i, new IntHistogram(NUM_HIST_BINS, minFieldValue[i], maxFieldValue[i]));
+            } else {
+                this.stringHistogramMap.put(i, new StringHistogram(NUM_HIST_BINS));
+            }
+        }
+
+        try {
+            ss1.rewind();
+            while(ss1.hasNext()) {
+                Tuple tup = ss1.next();
+                for (int i = 0; i < this.td.numFields(); i += 1) {
+                    if (td.getFieldType(i) == Type.INT_TYPE) {
+                        int value = ((IntField) tup.getField(i)).getValue();
+                        this.intHistogramMap.get(i).addValue(value);
+                    } else {
+                        String s = ((StringField)tup.getField(i)).getValue();
+                        this.stringHistogramMap.get(i).addValue(s);
+                    }
+                }
+            }
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -102,8 +177,7 @@ public class TableStats {
      * @return The estimated cost of scanning the table.
      */
     public double estimateScanCost() {
-        // some code goes here
-        return 0;
+        return ((HeapFile) file).numPages() * this.ioCostPerPage;
     }
 
     /**
@@ -116,8 +190,7 @@ public class TableStats {
      *         selectivityFactor
      */
     public int estimateTableCardinality(double selectivityFactor) {
-        // some code goes here
-        return 0;
+        return (int) (this.totalTuples() * selectivityFactor);
     }
 
     /**
@@ -131,8 +204,14 @@ public class TableStats {
      * expected selectivity. You may estimate this value from the histograms.
      * */
     public double avgSelectivity(int field, Predicate.Op op) {
-        // some code goes here
-        return 1.0;
+        if (this.td.getFieldType(field) == Type.INT_TYPE) {
+            IntHistogram intHistogram = this.intHistogramMap.get(field);
+                return intHistogram.avgSelectivity();
+        }
+         else {
+             StringHistogram stringHistogram = this.stringHistogramMap.get(field);
+             return stringHistogram.avgSelectivity();
+         }
     }
 
     /**
@@ -149,16 +228,21 @@ public class TableStats {
      *         predicate
      */
     public double estimateSelectivity(int field, Predicate.Op op, Field constant) {
-        // some code goes here
-        return 1.0;
+        if (this.td.getFieldType(field) == Type.INT_TYPE) {
+            IntHistogram intHistogram = this.intHistogramMap.get(field);
+            return intHistogram.estimateSelectivity(op, ((IntField)constant).getValue());
+        }
+        else {
+            StringHistogram stringHistogram = this.stringHistogramMap.get(field);
+            return stringHistogram.estimateSelectivity(op, ((StringField)constant).getValue());
+        }
     }
 
     /**
      * return the total number of tuples in this table
      * */
     public int totalTuples() {
-        // some code goes here
-        return 0;
+        return this.numTuples;
     }
 
 }

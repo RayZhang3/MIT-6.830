@@ -3,12 +3,14 @@ package simpledb.optimizer;
 import simpledb.common.Database;
 import simpledb.ParsingException;
 import simpledb.execution.*;
+import simpledb.storage.StringField;
 import simpledb.storage.TupleDesc;
 
 import java.util.*;
 
 import javax.swing.*;
 import javax.swing.tree.*;
+import javax.xml.crypto.Data;
 
 /**
  * The JoinOptimizer class is responsible for ordering a series of joins
@@ -130,7 +132,19 @@ public class JoinOptimizer {
             // HINT: You may need to use the variable "j" if you implemented
             // a join algorithm that's more complicated than a basic
             // nested-loops join.
-            return -1.0;
+            double totalCost = cost1 + card1 * cost2 + card1 * card2;
+            //nested-loops join
+            //scan tuples in table1, for each tuple in table1, scan tuple2, join two tables
+
+            /*
+                Consider the HashJoin
+                if (j.p.equals(Predicate.Op.EQUALS)) {
+            }
+             */
+
+
+            return totalCost;
+
         }
     }
 
@@ -175,7 +189,45 @@ public class JoinOptimizer {
                                                    boolean t2pkey, Map<String, TableStats> stats,
                                                    Map<String, Integer> tableAliasToId) {
         int card = 1;
-        // some code goes here
+        int tableId1 = tableAliasToId.get(table1Alias);
+        int tableId2 = tableAliasToId.get(table2Alias);
+        String tableName1 = Database.getCatalog().getTableName(tableId1);
+        String tableName2 = Database.getCatalog().getTableName(tableId2);
+        TupleDesc td1 = Database.getCatalog().getTupleDesc(tableId1);
+        TupleDesc td2 = Database.getCatalog().getTupleDesc(tableId2);
+        int table1FieldId =  td1.fieldNameToIndex(field1PureName);
+        int table2FieldId =  td2.fieldNameToIndex(field2PureName);
+
+        switch (joinOp) {
+            case EQUALS : {
+                if (!t1pkey && !t2pkey) {
+                    int largerCard = Math.max(card1, card2);
+                    double joinSelectivity = 1.0 / Math.max(card1 - stats.get(tableName1).avgSelectivity(table1FieldId, joinOp),
+                            card2 - stats.get(tableName2).avgSelectivity(table2FieldId, joinOp));
+                    card = (int) (card1 * card2 * joinSelectivity);
+                    // Another way to estimate the cardinality of a join is to
+                    // assume that each value in the smaller table has a matching value in the larger table.
+                    // Then the formula for the join selectivity would be:
+                    // 1/(Max(num-distinct(t1, column1), num-distinct(t2, column2))).
+                    // Here, column1 and column2 are the join attributes.
+                    // The cardinality of the join is then the product of the cardinalities of t1 and t2 times the selectivity.
+                } else if (t1pkey && !t2pkey) {
+                    card = card2;
+                } else if (!t1pkey && t2pkey) {
+                    card = card1;
+                } else {
+                    card = Math.min(card1, card2);
+                }
+                break;
+            }
+            case LESS_THAN:
+            case LESS_THAN_OR_EQ:
+            case GREATER_THAN:
+            case GREATER_THAN_OR_EQ:
+            case NOT_EQUALS:
+                card = (int) Math.max(0.3 * card1 * card2, Math.max(card1, card2));
+        }
+
         return card <= 0 ? 1 : card;
     }
 
@@ -190,11 +242,11 @@ public class JoinOptimizer {
      * @return a set of all subsets of the specified size
      */
     public <T> Set<Set<T>> enumerateSubsets(List<T> v, int size) {
+        /*
         Set<Set<T>> els = new HashSet<>();
         els.add(new HashSet<>());
         // Iterator<Set> it;
         // long start = System.currentTimeMillis();
-
         for (int i = 0; i < size; i++) {
             Set<Set<T>> newels = new HashSet<>();
             for (Set<T> s : els) {
@@ -206,11 +258,28 @@ public class JoinOptimizer {
             }
             els = newels;
         }
-
         return els;
-
+        */
+        Set<T> tmp = new HashSet<>();
+        Set<Set<T>> res = new HashSet<>();
+        backtracking(v, res, tmp, -1, size);
+        return res;
     }
 
+    private <T> void backtracking(List<T> v, Set<Set<T>> res, Set<T> tmp, int index, int size) {
+        if (tmp.size() == size) {
+            res.add(new HashSet<>(tmp));
+            return;
+        }
+        if (tmp.size() > size) {
+            return;
+        }
+        for (int i = index + 1; i < v.size(); i += 1) {
+            tmp.add(v.get(i));
+            backtracking(v, res, tmp, i, size);
+            tmp.remove(v.get(i));
+        }
+    }
     /**
      * Compute a logical, reasonably efficient join on the specified tables. See
      * PS4 for hints on how this should be implemented.
@@ -236,9 +305,42 @@ public class JoinOptimizer {
             Map<String, Double> filterSelectivities, boolean explain)
             throws ParsingException {
 
-        // some code goes here
-        //Replace the following
-        return joins;
+        CostCard bestCostCard = null;
+        PlanCache planCache = new PlanCache();
+        CostCard res = null;
+        // For all possible size values of subset
+        for (int i = 1; i <= joins.size(); i += 1) {
+            Set<Set<LogicalJoinNode>> fixedLengthSubsets = enumerateSubsets(joins, i);
+            // For all subset with size i
+            for (Set<LogicalJoinNode> set: fixedLengthSubsets) {
+                // the bestCost will be calculated and update by the result of computeCostAndCardOfSubplan
+                double bestCostValue = Double.MAX_VALUE;
+                // bestCostCard record the cost(optimal subplan), card(cardinality), and plan(List<LogicalJoinNode>)
+                bestCostCard = new CostCard();
+                bestCostCard.cost = bestCostValue;
+
+                CostCard computeResult = null;
+                for (LogicalJoinNode removeNode: set) {
+                    computeResult = computeCostAndCardOfSubplan(stats, filterSelectivities, removeNode, set, bestCostValue, planCache);
+                    if (computeResult != null) {
+                        bestCostCard = computeResult;
+                        bestCostValue = bestCostCard.cost;
+                    }
+                }
+                if (bestCostCard.cost != Double.MAX_VALUE) {
+                    planCache.addPlan(set, bestCostCard.cost, bestCostCard.card, bestCostCard.plan);
+                }
+            }
+        }
+
+        if (bestCostCard.plan.size() == joins.size()) {
+            res = bestCostCard;
+        }
+
+        if (explain) {
+            printJoins(res.plan, planCache, stats, filterSelectivities);
+        }
+        return res.plan;
     }
 
     // ===================== Private Methods =================================
