@@ -6,11 +6,12 @@ import simpledb.transaction.TransactionId;
 
 import java.io.*;
 
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
+
+import static org.junit.Assert.assertTrue;
 
 /**
  * BufferPool manages the reading and writing of pages into memory from
@@ -38,6 +39,8 @@ public class BufferPool {
     Map<PageId, DlinkedNode> PagesMap;
     DlinkedNode sentinel;
     DlinkedNode endSentinel;
+    LockManager lockManager;
+    WaitForGraph waitForGraph;
     private class DlinkedNode {
         PageId pid;
         Page page;
@@ -69,8 +72,8 @@ public class BufferPool {
         sentinel.next.prev = node;
         sentinel.next = node;
     }
-    public DlinkedNode removeFirst() {
-        DlinkedNode targetNode = sentinel.next;
+    public DlinkedNode removeLast() {
+        DlinkedNode targetNode = endSentinel.prev;
         return deleteNode(targetNode);
     }
     public void moveToFirst(DlinkedNode node) {
@@ -84,12 +87,14 @@ public class BufferPool {
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-         this.PagesMap = new HashMap<>();
+         this.PagesMap = new ConcurrentHashMap<>();
          this.numPages = numPages;
-         sentinel = new DlinkedNode();
-         endSentinel = new DlinkedNode();
-         sentinel.next = endSentinel;
-         endSentinel.prev = sentinel;
+         this.sentinel = new DlinkedNode();
+         this.endSentinel = new DlinkedNode();
+         this.sentinel.next = endSentinel;
+         this.endSentinel.prev = sentinel;
+         this.lockManager = new LockManager();
+         this.waitForGraph = new WaitForGraph();
     }
     
     public static int getPageSize() {
@@ -121,28 +126,66 @@ public class BufferPool {
      * @param pid the ID of the requested page
      * @param perm the requested permissions on the page
      */
-    public Page getPage(TransactionId tid, PageId pid, Permissions perm)
+    public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
+        boolean AccessPermission = false;
+        synchronized (this) {
+            while(!AccessPermission) {
+                if (this.lockManager.hasLock(tid, pid)) {
+                    LockManager.PageLock lock = this.lockManager.getlock(tid, pid);
+                    if (perm == Permissions.READ_ONLY) {
+                        AccessPermission = true;
+                        break;
+                    }
+                    if (perm == Permissions.READ_WRITE && lock.lockType == LockManager.PageLock.LockType.EXCLUSIVE_LOCK) {
+                        AccessPermission = true;
+                        break;
+                    }
+                }
+                // Mismatch lock type or not lock
+                // Need to upgrade or acquireLock by grantLock()
+                // If failed. wait().
+                if (!AccessPermission && this.lockManager.grantLock(tid, pid, perm)) {
+                    AccessPermission = true;
+                    break;
+                } else {
+                    try {
+                        this.wait();
+                    } catch (Exception e) {
+                        e.printStackTrace();
+                    }
+                }
+            }
+        }
+        assertTrue(AccessPermission);
+
         if (PagesMap.containsKey(pid)) {
             DlinkedNode node = PagesMap.get(pid);
             moveToFirst(node);
             return node.getPage();
-        } else {
-            // The capacity is full
+        } else { // The page is not in PageMap
+            // The capacity is full, evict page
             if (PagesMap.size() >= numPages) {
-                DlinkedNode target = sentinel.next;
-                deleteNode(target);
-                PagesMap.remove(target.getPageId());
+                evictPage();
             }
             DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
             Page page = file.readPage(pid);
             DlinkedNode node = new DlinkedNode(pid, page, null, null);
             addHeadNode(node);
             PagesMap.put(pid, node);
+            //check if the page has no tuples
+            //if (((HeapPage)page).getNumEmptySlots() == ((HeapPage) page).numSlots){
+            //    unsafeReleasePage(tid, pid);
+            //}
             return node.getPage();
         }
     }
+
+    private boolean isPageLocked(PageId pid) {
+        return this.lockManager.isPageLocked(pid);
+    }
+
 
     /**
      * Releases the lock on a page.
@@ -154,8 +197,7 @@ public class BufferPool {
      * @param pid the ID of the page to unlock
      */
     public  void unsafeReleasePage(TransactionId tid, PageId pid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        this.lockManager.releaseLock(tid, pid);
     }
 
     /**
@@ -164,15 +206,12 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      */
     public void transactionComplete(TransactionId tid) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        transactionComplete(tid, true);
     }
 
     /** Return true if the specified transaction has a lock on the specified page */
     public boolean holdsLock(TransactionId tid, PageId p) {
-        // some code goes here
-        // not necessary for lab1|lab2
-        return false;
+        return this.lockManager.hasLock(tid, p);
     }
 
     /**
@@ -183,8 +222,34 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
-        // some code goes here
-        // not necessary for lab1|lab2
+        synchronized (this) {
+            List<PageId> PageIds = this.lockManager.transactionRWPageIds(tid);
+            if (commit) {
+                try {
+                    flushPages(tid);
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            } else {
+                //restore the dirty page to its on-disk state
+                for (PageId pid: PageIds) {
+                    DlinkedNode dirtyNode = PagesMap.get(pid);
+                    Page dirtyPage =dirtyNode.getPage();
+                    if (dirtyPage.isDirty().equals(tid)) {
+                        DbFile file = Database.getCatalog().getDatabaseFile(dirtyPage.getId().getTableId());
+                        Page newPage = file.readPage(dirtyPage.getId());
+                        newPage.markDirty(false, null);
+                        DlinkedNode newNode = new DlinkedNode(pid, newPage, null, null);
+                        deleteNode(dirtyNode);
+                        addHeadNode(newNode);
+                        PagesMap.remove(pid);
+                        PagesMap.put(pid, newNode);
+                    }
+                }
+            }
+            this.lockManager.releaseLock(tid);
+            this.notifyAll();
+        }
     }
 
     /**
@@ -207,6 +272,7 @@ public class BufferPool {
         DbFile file = Database.getCatalog().getDatabaseFile(tableId);
         List<Page> dirtyPages = file.insertTuple(tid, t);
         for (Page page: dirtyPages) {
+            page.markDirty(true, tid);
             DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
             addHeadNode(node);
             PagesMap.put(page.getId(), node);
@@ -231,6 +297,7 @@ public class BufferPool {
         DbFile file = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
         List<Page> dirtyPages = file.deleteTuple(tid, t);
         for (Page page: dirtyPages) {
+            page.markDirty(true, tid);
             DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
             addHeadNode(node);
             PagesMap.put(page.getId(), node);
@@ -270,23 +337,47 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
-        DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
         Page targetPage = PagesMap.get(pid).getPage();
-        if (targetPage == null) {
-            throw new NoSuchElementException();
+        if (targetPage.isDirty() != null) {
+            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+            file.writePage(targetPage);
+            targetPage.markDirty(false, null);
         }
-        file.writePage(targetPage);
     }
 
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
+        List<PageId> RWPageIds= this.lockManager.transactionRWPageIds(tid);
+        for (PageId pid: RWPageIds) {
+            if (this.PagesMap.containsKey(pid)) {
+                flushPage(pid);
+            }
+        }
+        /*
         for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
             Page page = entry.getValue().getPage();
             if (page.isDirty().equals(tid)) {
                 flushPage(entry.getKey());
             }
         }
+
+         */
+    }
+
+    private DlinkedNode findEvictedPage() throws DbException {
+        DlinkedNode node = endSentinel.prev;
+        while (node != this.sentinel) {
+            //if (node.getPage().isDirty() != null && isPageLocked(node.getPageId())) {
+            // Page is dirty, skip
+            if (node.getPage().isDirty() == null) {
+                return node;
+            } else {
+                node = node.prev;
+            }
+        }
+        assertTrue(node != null);
+        throw new DbException("All pages are dirty!");
     }
 
     /**
@@ -294,13 +385,18 @@ public class BufferPool {
      * Flushes the page to disk to ensure dirty pages are updated on disk.
      */
     private synchronized void evictPage() throws DbException {
-        DlinkedNode node = removeFirst();
+        DlinkedNode node = findEvictedPage();
+        PageId pid = null;
         try {
-            flushPage(node.getPageId());
+            pid = node.getPageId();
+            flushPage(pid);
+            deleteNode(node);
+            PagesMap.remove(pid);
+            this.lockManager.releaseLock(pid);
         } catch (IOException e) {
             e.printStackTrace();
         }
-        PagesMap.remove(node);
+
     }
 
 }

@@ -35,7 +35,7 @@ public class HeapFileIterator implements DbFileIterator{
     public void open() throws DbException, TransactionAbortedException {
         HeapPageId pid = new HeapPageId(file.getId(), currPage);
         try {
-            HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
+            HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_ONLY);
             this.PageIterator = hp.iterator();
         } catch(ClassCastException e) {
             e.printStackTrace();
@@ -43,10 +43,6 @@ public class HeapFileIterator implements DbFileIterator{
 
         if (Database.getBufferPool() == null) {
             throw new DbException("The BufferPool is null");
-        }
-        if (tid == null) {
-            // Implement in other Labs
-            throw new TransactionAbortedException();
         }
     }
 
@@ -66,7 +62,7 @@ public class HeapFileIterator implements DbFileIterator{
             }
             PageId pid = new HeapPageId(file.getId(), currPage);
             try {
-                HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
+                HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_ONLY);
                 this.PageIterator = hp.iterator();
                 return hasNext();
             } catch(ClassCastException e) {
@@ -106,7 +102,7 @@ public class HeapFileIterator implements DbFileIterator{
             }
             PageId pid = new HeapPageId(file.getId(), currPage);
             try {
-                HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
+                HeapPage hp = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_ONLY);
                 this.PageIterator = hp.iterator();
             } catch(ClassCastException e) {
                 e.printStackTrace();

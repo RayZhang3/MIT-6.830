@@ -143,9 +143,6 @@ public class HeapFile implements DbFile {
                 page.insertTuple(t);
                 List<Page> pages = new ArrayList<>();
                 pages.add(page);
-
-                writePage(page); // write page now?
-
                 return pages;
             }
         }
@@ -153,10 +150,11 @@ public class HeapFile implements DbFile {
         byte[] pageData = HeapPage.createEmptyPageData();
         HeapPageId newPid = new HeapPageId(this.getId(), numPages());
         HeapPage appendPage = new HeapPage(newPid, pageData);
+
+        writePage(appendPage); // write page before inserting the tuple
         appendPage.insertTuple(t);
 
-        writePage(appendPage); // write page now?
-
+        //writePage(appendPage); // write page
         List<Page> pages = new ArrayList<>();
         pages.add(appendPage);
         return pages;
