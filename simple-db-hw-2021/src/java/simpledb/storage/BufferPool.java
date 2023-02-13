@@ -232,18 +232,20 @@ public class BufferPool {
                 }
             } else {
                 //restore the dirty page to its on-disk state
-                for (PageId pid: PageIds) {
-                    DlinkedNode dirtyNode = PagesMap.get(pid);
-                    Page dirtyPage =dirtyNode.getPage();
-                    if (dirtyPage.isDirty().equals(tid)) {
-                        DbFile file = Database.getCatalog().getDatabaseFile(dirtyPage.getId().getTableId());
-                        Page newPage = file.readPage(dirtyPage.getId());
-                        newPage.markDirty(false, null);
-                        DlinkedNode newNode = new DlinkedNode(pid, newPage, null, null);
-                        deleteNode(dirtyNode);
-                        addHeadNode(newNode);
-                        PagesMap.remove(pid);
-                        PagesMap.put(pid, newNode);
+                if (PageIds != null){
+                    for (PageId pid: PageIds) {
+                        DlinkedNode dirtyNode = PagesMap.get(pid);
+                        Page dirtyPage =dirtyNode.getPage();
+                        if (dirtyPage != null &&  dirtyPage.isDirty() != null &&dirtyPage.isDirty().equals(tid)) {
+                            DbFile file = Database.getCatalog().getDatabaseFile(dirtyPage.getId().getTableId());
+                            Page newPage = file.readPage(dirtyPage.getId());
+                            newPage.markDirty(false, null);
+                            DlinkedNode newNode = new DlinkedNode(pid, newPage, null, null);
+                            deleteNode(dirtyNode);
+                            addHeadNode(newNode);
+                            PagesMap.remove(pid);
+                            PagesMap.put(pid, newNode);
+                        }
                     }
                 }
             }
@@ -324,12 +326,16 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
+        /*
         if (!PagesMap.containsKey(pid)) {
             throw new NoSuchElementException();
         }
-        DlinkedNode targetNode = PagesMap.get(pid);
-        deleteNode(targetNode);
-        PagesMap.remove(pid);
+         */
+        if (PagesMap.containsKey(pid)) {
+            DlinkedNode targetNode = PagesMap.get(pid);
+            deleteNode(targetNode);
+            PagesMap.remove(pid);
+        }
     }
 
     /**
@@ -337,11 +343,13 @@ public class BufferPool {
      * @param pid an ID indicating the page to flush
      */
     private synchronized void flushPage(PageId pid) throws IOException {
-        Page targetPage = PagesMap.get(pid).getPage();
-        if (targetPage.isDirty() != null) {
-            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
-            file.writePage(targetPage);
-            targetPage.markDirty(false, null);
+        if (PagesMap.containsKey(pid)){
+            Page targetPage = PagesMap.get(pid).getPage();
+            if (targetPage.isDirty() != null) {
+                DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                file.writePage(targetPage);
+                targetPage.markDirty(false, null);
+            }
         }
     }
 
@@ -349,6 +357,9 @@ public class BufferPool {
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
         List<PageId> RWPageIds= this.lockManager.transactionRWPageIds(tid);
+        if (RWPageIds == null) {
+            return;
+        }
         for (PageId pid: RWPageIds) {
             if (this.PagesMap.containsKey(pid)) {
                 flushPage(pid);

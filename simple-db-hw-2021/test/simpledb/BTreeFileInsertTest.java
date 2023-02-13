@@ -163,8 +163,14 @@ public class BTreeFileInsertTest extends SimpleDbTestBase {
 		Field field = new IntField(BTreeUtility.MAX_RAND_VALUE/2);
 		dirtypages.put(leftPageId, leftPage);
 		dirtypages.put(parentId, parent);
+
+		BTreeChecker.checkRep(empty, tid, dirtypages, true);
+
 		BTreeLeafPage page = empty.splitLeafPage(tid, dirtypages, leftPage, field);
 		assertTrue(page.getLeftSiblingId() != null || page.getRightSiblingId() != null);
+
+
+
 		BTreeLeafPage otherPage;
 		if(page.getLeftSiblingId() != null) {
 			otherPage = (BTreeLeafPage) dirtypages.get(page.getLeftSiblingId());

@@ -692,7 +692,7 @@ class BTreeInternalPageIterator implements Iterator<BTreeEntry> {
 
 		try {
 			if(prevChildId == null) {
-				prevChildId = p.getChildId(0);
+				prevChildId = p.getChildId(0); // get the left most child page id
 				if(prevChildId == null) {
 					return false;
 				}
@@ -700,7 +700,7 @@ class BTreeInternalPageIterator implements Iterator<BTreeEntry> {
 			while (true) {
 				int entry = curEntry++;
 				Field key = p.getKey(entry);
-				BTreePageId childId = p.getChildId(entry);
+				BTreePageId childId = p.getChildId(entry); // get the right child page id of key
 				if(key != null && childId != null) {
 					nextToReturn = new BTreeEntry(key, prevChildId, childId);
 					nextToReturn.setRecordId(new RecordId(p.pid, entry));

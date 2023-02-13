@@ -310,6 +310,7 @@ public class BTreeLeafPage extends BTreePage {
 	 * @param t The tuple to add.
 	 */
 	public void insertTuple(Tuple t) throws DbException {
+
 		if (!t.getTupleDesc().equals(td))
 			throw new DbException("type mismatch, in addTuple");
 
