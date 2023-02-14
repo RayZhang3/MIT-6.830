@@ -365,7 +365,7 @@ public class BTreeInternalPage extends BTreePage {
 					children[i] = children[rid.getTupleNumber()];
 					markSlotUsed(rid.getTupleNumber(), false);
 					break;
-				}	
+				}
 			}
 		}
 		e.setRecordId(null);
@@ -489,6 +489,22 @@ public class BTreeInternalPage extends BTreePage {
 			if(isSlotUsed(i)) {
 				if(children[i] == e.getLeftChild().getPageNumber() || children[i] == e.getRightChild().getPageNumber()) {
 					if(i > 0 && keys[i].compare(Op.GREATER_THAN, e.getKey())) {
+						System.out.println("In this case, children[i] matches e.leftChild or e.rightChild");
+						System.out.println("e is the entry you insert, and keys[i] must be greater than e.getKey()");
+						System.out.println("i = " + i);
+						System.out.println("keys[i] = " + ((IntField)keys[i]).getValue());
+						System.out.println("keys[i].left = " + (children[i - 1]));
+						System.out.println("keys[i].right = " + (children[i + 1]));
+						System.out.println("e = " + (((IntField)e.getKey()).getValue()));
+						System.out.println("e.left = " + (e.getLeftChild().getPageNumber()));
+						System.out.println("e.right = " + (e.getRightChild()).getPageNumber());
+						if (i - 1 > 0) {
+							System.out.println("keys[i - 1] = " + ((IntField)keys[i - 1]).getValue());
+						}
+						if (i + 1 < numSlots) {
+							System.out.println("keys[i + 1] = " + ((IntField)keys[i + 1]).getValue());
+						}
+						System.out.println("e.getKey() = " + ((IntField)e.getKey()).getValue());
 						throw new DbException("attempt to insert invalid entry with left child " + 
 								e.getLeftChild().getPageNumber() + ", right child " +
 								e.getRightChild().getPageNumber() + " and key " + e.getKey() +

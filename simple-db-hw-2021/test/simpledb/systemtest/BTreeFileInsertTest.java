@@ -20,6 +20,7 @@ import junit.framework.JUnit4TestAdapter;
 import simpledb.storage.IntField;
 import simpledb.storage.Tuple;
 import simpledb.transaction.TransactionId;
+import simpledb.index.*;
 
 public class BTreeFileInsertTest extends SimpleDbTestBase {
 	private TransactionId tid;

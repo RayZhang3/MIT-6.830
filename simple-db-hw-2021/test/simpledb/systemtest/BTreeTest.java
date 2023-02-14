@@ -137,7 +137,8 @@ public class BTreeTest extends SimpleDbTestBase {
 		waitForDeleterThreads(deleteThreads);
 		int numPages = bf.numPages();
 		size = insertedTuples.size();
-		
+
+
 		// now delete a bunch of tuples
 		System.out.println("Deleting tuples...");
 		for(int i = 0; i < 10; i++) {

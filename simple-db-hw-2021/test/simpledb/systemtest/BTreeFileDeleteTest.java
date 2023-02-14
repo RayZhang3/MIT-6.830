@@ -18,6 +18,7 @@ import junit.framework.JUnit4TestAdapter;
 import simpledb.storage.Tuple;
 import simpledb.transaction.TransactionId;
 
+
 public class BTreeFileDeleteTest extends SimpleDbTestBase {
 	private TransactionId tid;
 
@@ -208,6 +209,13 @@ public class BTreeFileDeleteTest extends SimpleDbTestBase {
 		BTreeInternalPage rightChild = (BTreeInternalPage) Database.getBufferPool().getPage(
 				tid, rootEntry.getRightChild(), Permissions.READ_ONLY);
 
+		// My test
+		System.out.println("leftChild Entrys:" + leftChild.getNumEntries());
+		System.out.println("rightChild Entrys:" + rightChild.getNumEntries());
+		System.out.println("leftChild EmptySlots:" + leftChild.getNumEmptySlots());
+		System.out.println("rightChild EmptySlots:" + rightChild.getNumEmptySlots());
+		System.out.println();
+
 		// delete from the right child to test redistribution from the left
 		Iterator<BTreeEntry> it = rightChild.iterator();
 		int count = 0;
@@ -220,7 +228,12 @@ public class BTreeFileDeleteTest extends SimpleDbTestBase {
 			it = rightChild.iterator();
 			count++;
 		}
-
+		// My test
+		System.out.println("leftChild Entrys:" + leftChild.getNumEntries());
+		System.out.println("rightChild Entrys:" + rightChild.getNumEntries());
+		System.out.println("leftChild EmptySlots:" + leftChild.getNumEmptySlots());
+		System.out.println("rightChild EmptySlots:" + rightChild.getNumEmptySlots());
+		System.out.println();
 		// deleting a page of tuples should bring the internal page below minimum 
 		// occupancy and cause the entries to be redistributed
 		assertEquals(252, rightChild.getNumEmptySlots());
@@ -233,6 +246,13 @@ public class BTreeFileDeleteTest extends SimpleDbTestBase {
 			it = rightChild.iterator();
 			count++;
 		}
+		// My test
+		System.out.println("leftChild Entrys:" + leftChild.getNumEntries());
+		System.out.println("rightChild Entrys:" + rightChild.getNumEntries());
+		System.out.println("leftChild EmptySlots:" + leftChild.getNumEmptySlots());
+		System.out.println("rightChild EmptySlots:" + rightChild.getNumEmptySlots());
+		BTreeChecker.checkRep(bf, tid, new HashMap<>(), true);
+
 		assertTrue(leftChild.getNumEmptySlots() > 203);
 		assertTrue(rightChild.getNumEmptySlots() <= 252);
 		BTreeChecker.checkRep(bf, tid, new HashMap<>(), true);

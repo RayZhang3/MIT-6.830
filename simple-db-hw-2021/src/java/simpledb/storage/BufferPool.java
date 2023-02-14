@@ -1,15 +1,18 @@
 package simpledb.storage;
 
 import simpledb.common.*;
+import simpledb.transaction.Transaction;
 import simpledb.transaction.TransactionAbortedException;
 import simpledb.transaction.TransactionId;
 
+import javax.xml.crypto.Data;
 import java.io.*;
 
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.locks.Lock;
 
 import static org.junit.Assert.assertTrue;
 
@@ -25,6 +28,7 @@ import static org.junit.Assert.assertTrue;
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
+    public List<Long> cycleTransaction;
     /** Bytes per page, including header. */
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
@@ -39,8 +43,14 @@ public class BufferPool {
     Map<PageId, DlinkedNode> PagesMap;
     DlinkedNode sentinel;
     DlinkedNode endSentinel;
-    LockManager lockManager;
-    WaitForGraph waitForGraph;
+    private static LockManager lockManager;
+    private static WaitForGraph waitForGraph;
+    public LockManager getLockManager() {
+        return lockManager;
+    }
+    public WaitForGraph getWaitForGraph() {
+        return waitForGraph;
+    }
     private class DlinkedNode {
         PageId pid;
         Page page;
@@ -61,22 +71,22 @@ public class BufferPool {
         }
 
     }
-    public DlinkedNode deleteNode(DlinkedNode node) {
+    public synchronized DlinkedNode deleteNode(DlinkedNode node) {
         node.next.prev = node.prev;
         node.prev.next = node.next;
         return node;
     }
-    public void addHeadNode(DlinkedNode node) {
+    public synchronized void addHeadNode(DlinkedNode node) {
         node.prev = sentinel;
         node.next = sentinel.next;
         sentinel.next.prev = node;
         sentinel.next = node;
     }
-    public DlinkedNode removeLast() {
+    public synchronized DlinkedNode removeLast() {
         DlinkedNode targetNode = endSentinel.prev;
         return deleteNode(targetNode);
     }
-    public void moveToFirst(DlinkedNode node) {
+    public synchronized void moveToFirst(DlinkedNode node) {
         deleteNode(node);
         addHeadNode(node);
     }
@@ -129,57 +139,92 @@ public class BufferPool {
     public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
         // some code goes here
-        boolean AccessPermission = false;
-        synchronized (this) {
-            while(!AccessPermission) {
-                if (this.lockManager.hasLock(tid, pid)) {
-                    LockManager.PageLock lock = this.lockManager.getlock(tid, pid);
-                    if (perm == Permissions.READ_ONLY) {
-                        AccessPermission = true;
-                        break;
-                    }
-                    if (perm == Permissions.READ_WRITE && lock.lockType == LockManager.PageLock.LockType.EXCLUSIVE_LOCK) {
-                        AccessPermission = true;
-                        break;
-                    }
-                }
-                // Mismatch lock type or not lock
-                // Need to upgrade or acquireLock by grantLock()
-                // If failed. wait().
-                if (!AccessPermission && this.lockManager.grantLock(tid, pid, perm)) {
-                    AccessPermission = true;
-                    break;
-                } else {
-                    try {
-                        this.wait();
-                    } catch (Exception e) {
-                        e.printStackTrace();
-                    }
-                }
-            }
-        }
-        assertTrue(AccessPermission);
 
-        if (PagesMap.containsKey(pid)) {
-            DlinkedNode node = PagesMap.get(pid);
-            moveToFirst(node);
-            return node.getPage();
-        } else { // The page is not in PageMap
-            // The capacity is full, evict page
-            if (PagesMap.size() >= numPages) {
-                evictPage();
+        boolean AccessPermission = false;
+            while (!AccessPermission) {
+                String processName = Thread.currentThread().getName();
+                // print thread information
+                //System.out.print(processName + " want to get new Page " + pid.getTableId() + "." + pid.getPageNumber() + " in tid: " + tid.getId());
+                LockManager.PageLock pageLock = getLockManager().grantLock(tid, pid, perm);
+                if (pageLock != null) {
+                    switch (pageLock.lockType) {
+                        case EXCLUSIVE_LOCK: {
+                            AccessPermission = true;
+                            break;
+                        }
+                        case SHARED_LOCK: {
+                            if (perm == Permissions.READ_ONLY) {
+                                AccessPermission = true;
+                            }
+                            break;
+                        }
+                        case WAITING: {
+                            LockManager.PageLock lock = getLockManager().grantLock(tid, pid, perm);
+                            if (lock == null) {
+                                try {
+                                    String thisprocessName = Thread.currentThread().getName();
+                                    // print thread information
+                                    //System.out.print(", and fail, so ");
+                                    //System.out.println(thisprocessName + " waits");
+                                    this.wait();
+                                } catch (InterruptedException e){
+                                    e.printStackTrace();
+                                }
+                            }
+                            switch(lock.lockType) {
+                                case EXCLUSIVE_LOCK : {
+                                    AccessPermission = true;
+                                    break;
+                                }
+                                case SHARED_LOCK: {
+                                    AccessPermission = (perm == Permissions.READ_ONLY);
+                                    break;
+                                }
+                                case WAITING:{
+                                    try {
+                                        String thisprocessName = Thread.currentThread().getName();
+                                        // print thread information
+                                        //System.out.print(", and fail, so ");
+                                        //System.out.println(thisprocessName + " waits");
+                                        this.wait();
+                                    } catch (InterruptedException e){
+                                        e.printStackTrace();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
-            DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
-            Page page = file.readPage(pid);
-            DlinkedNode node = new DlinkedNode(pid, page, null, null);
-            addHeadNode(node);
-            PagesMap.put(pid, node);
-            //check if the page has no tuples
-            //if (((HeapPage)page).getNumEmptySlots() == ((HeapPage) page).numSlots){
-            //    unsafeReleasePage(tid, pid);
-            //}
-            return node.getPage();
-        }
+            /*
+            if (cycleTransaction != null) {
+                if (cycleTransaction.contains(tid.getId())) {
+                    cycleTransaction.remove(tid);
+                    transactionComplete(tid, false);
+                }
+            }
+             */
+            //System.out.println(", and success");
+            assertTrue(AccessPermission);
+
+            if (PagesMap.containsKey(pid)) {
+                DlinkedNode node = PagesMap.get(pid);
+                moveToFirst(node);
+                return node.getPage();
+            } else { // The page is not in PageMap
+                // The capacity is full, evict page
+                if (PagesMap.size() >= numPages) {
+                    evictPage();
+                }
+                DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                Page page = file.readPage(pid);
+                DlinkedNode node = new DlinkedNode(pid, page, null, null);
+                addHeadNode(node);
+                PagesMap.put(pid, node);
+
+                return node.getPage();
+            }
+
     }
 
     private boolean isPageLocked(PageId pid) {
@@ -222,8 +267,10 @@ public class BufferPool {
      * @param commit a flag indicating whether we should commit or abort
      */
     public void transactionComplete(TransactionId tid, boolean commit) {
+        String thisprocessName = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
         synchronized (this) {
-            List<PageId> PageIds = this.lockManager.transactionRWPageIds(tid);
+            //List<PageId> PageIds = this.lockManager.transactionRWPageIds(tid);
+            List<PageId> PageIds = this.lockManager.transactionPageIds(tid);
             if (commit) {
                 try {
                     flushPages(tid);
@@ -235,8 +282,8 @@ public class BufferPool {
                 if (PageIds != null){
                     for (PageId pid: PageIds) {
                         DlinkedNode dirtyNode = PagesMap.get(pid);
-                        Page dirtyPage =dirtyNode.getPage();
-                        if (dirtyPage != null &&  dirtyPage.isDirty() != null &&dirtyPage.isDirty().equals(tid)) {
+                        Page dirtyPage = dirtyNode.getPage();
+                        if (dirtyPage != null &&  dirtyPage.isDirty() != null && dirtyPage.isDirty().equals(tid)) {
                             DbFile file = Database.getCatalog().getDatabaseFile(dirtyPage.getId().getTableId());
                             Page newPage = file.readPage(dirtyPage.getId());
                             newPage.markDirty(false, null);
@@ -250,8 +297,14 @@ public class BufferPool {
                 }
             }
             this.lockManager.releaseLock(tid);
+            // print thread information
+            // System.out.println(thisprocessName + " complete " + tid.getId());
+            this.waitForGraph.removeVertex(tid);
+            // print thread information
+            //System.out.println(thisprocessName + " finished remove Vertex" + tid.getId());
             this.notifyAll();
         }
+
     }
 
     /**
@@ -273,12 +326,7 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         DbFile file = Database.getCatalog().getDatabaseFile(tableId);
         List<Page> dirtyPages = file.insertTuple(tid, t);
-        for (Page page: dirtyPages) {
-            page.markDirty(true, tid);
-            DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
-            addHeadNode(node);
-            PagesMap.put(page.getId(), node);
-        }
+        updateBufferPool(dirtyPages, tid);
     }
 
     /**
@@ -298,12 +346,7 @@ public class BufferPool {
         throws DbException, IOException, TransactionAbortedException {
         DbFile file = Database.getCatalog().getDatabaseFile(t.getRecordId().getPageId().getTableId());
         List<Page> dirtyPages = file.deleteTuple(tid, t);
-        for (Page page: dirtyPages) {
-            page.markDirty(true, tid);
-            DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
-            addHeadNode(node);
-            PagesMap.put(page.getId(), node);
-        }
+        updateBufferPool(dirtyPages, tid);
     }
 
     /**
@@ -326,11 +369,6 @@ public class BufferPool {
         are removed from the cache so they can be reused safely
     */
     public synchronized void discardPage(PageId pid) {
-        /*
-        if (!PagesMap.containsKey(pid)) {
-            throw new NoSuchElementException();
-        }
-         */
         if (PagesMap.containsKey(pid)) {
             DlinkedNode targetNode = PagesMap.get(pid);
             deleteNode(targetNode);
@@ -362,21 +400,15 @@ public class BufferPool {
         }
         for (PageId pid: RWPageIds) {
             if (this.PagesMap.containsKey(pid)) {
-                flushPage(pid);
+                Page page = PagesMap.get(pid).getPage();
+                if (page.isDirty() != null && page.isDirty().equals(tid)) {
+                    flushPage(pid);
+                }
             }
         }
-        /*
-        for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
-            Page page = entry.getValue().getPage();
-            if (page.isDirty().equals(tid)) {
-                flushPage(entry.getKey());
-            }
-        }
-
-         */
     }
 
-    private DlinkedNode findEvictedPage() throws DbException {
+    private synchronized DlinkedNode findEvictedPage() throws DbException {
         DlinkedNode node = endSentinel.prev;
         while (node != this.sentinel) {
             //if (node.getPage().isDirty() != null && isPageLocked(node.getPageId())) {
@@ -410,4 +442,24 @@ public class BufferPool {
 
     }
 
+    private synchronized void updateBufferPool(List<Page> dirtyPages, TransactionId tid) throws DbException {
+        for (Page page: dirtyPages) {
+            page.markDirty(true, tid);
+            if (PagesMap.containsKey(page.getId())) {
+                DlinkedNode oldNode = PagesMap.get(page.getId());
+                DlinkedNode newNode = new DlinkedNode(page.getId(), page, null, null);
+                deleteNode(oldNode);
+                PagesMap.remove(oldNode);
+                addHeadNode(newNode);
+                PagesMap.put(newNode.getPageId(), newNode);
+            } else {
+                if (PagesMap.size() >= numPages) {
+                    evictPage();
+                }
+                DlinkedNode node = new DlinkedNode(page.getId(), page, null, null);
+                addHeadNode(node);
+                PagesMap.put(node.getPageId(), node);
+            }
+        }
+    }
 }

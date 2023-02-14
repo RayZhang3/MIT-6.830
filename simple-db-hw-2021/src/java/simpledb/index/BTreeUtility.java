@@ -358,7 +358,7 @@ public class BTreeUtility {
 	 * @throws IOException
 	 */
 	public static BTreeInternalPage createRandomInternalPage(BTreePageId pid, int keyField, int childPageCategory, int numKeys, int minKey, int maxKey, int minChildPtr) throws IOException {
-		byte[] data = BTreeFileEncoder.convertToInternalPage(BTreeUtility.generateRandomEntries(numKeys, pid.getTableId(), childPageCategory, minKey, maxKey, minChildPtr), 
+		byte[] data = BTreeFileEncoder.convertToInternalPage(generateRandomEntries(numKeys, pid.getTableId(), childPageCategory, minKey, maxKey, minChildPtr),
 				BufferPool.getPageSize(), Type.INT_TYPE, childPageCategory);
         return new BTreeInternalPage(pid, data, keyField);
 	}
