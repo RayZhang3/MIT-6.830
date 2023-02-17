@@ -94,6 +94,16 @@ public class LogFile {
     int totalRecords = 0; // for PatchTest //protected by this
 
     final Map<Long,Long> tidToFirstLogRecord = new HashMap<>();
+    class LogRecord {
+        static int REDO = 0;
+        static int UNDO = 1;
+        public int recordType;
+        public long tid;
+        LogRecord(int recordType, long tid) {
+            this.recordType = recordType;
+            this.tid = tid;
+        }
+    }
 
     /** Constructor.
         Initialize and back the log file with the specified file.
@@ -107,7 +117,7 @@ public class LogFile {
         @param f The log file's name
     */
     public LogFile(File f) throws IOException {
-	this.logFile = f;
+	    this.logFile = f;
         raf = new RandomAccessFile(f, "rw");
         recoveryUndecided = true;
 
@@ -196,7 +206,7 @@ public class LogFile {
 
         @see Page#getBeforeImage
     */
-    public  synchronized void logWrite(TransactionId tid, Page before,
+    public synchronized void logWrite(TransactionId tid, Page before,
                                        Page after)
         throws IOException  {
         Debug.log("WRITE, offset = " + raf.getFilePointer());
@@ -443,7 +453,6 @@ public class LogFile {
         newFile.delete();
 
         currentOffset = raf.getFilePointer();
-        //print();
     }
 
     /** Rollback the specified transaction, setting the state of any
@@ -459,7 +468,40 @@ public class LogFile {
         synchronized (Database.getBufferPool()) {
             synchronized(this) {
                 preAppend();
-                // some code goes here
+                if (!tidToFirstLogRecord.containsKey(tid.getId())) {
+                    return;
+                }
+                Set<PageId> rollbackPid = new HashSet<>();
+                long firstrecordOffset = tidToFirstLogRecord.get(tid.getId());
+                raf.seek(firstrecordOffset);
+                long currEnd = raf.length();
+                while (raf.getFilePointer() < currEnd) {
+                    int recordType = raf.readInt();
+                    long recordTid = raf.readLong();
+                    switch(recordType) {
+                        case UPDATE_RECORD: {
+                            Page beforeImg = readPageData(raf);
+                            Page afterImg = readPageData(raf);
+                            if (recordTid == tid.getId() && !rollbackPid.contains(beforeImg.getId())) {
+                                DbFile tableFile = Database.getCatalog().getDatabaseFile(beforeImg.getId().getTableId());
+                                tableFile.writePage(beforeImg);
+                                rollbackPid.add(beforeImg.getId());
+                                Database.getBufferPool().discardPage(beforeImg.getId());
+                            }
+                            break;
+                        }
+                        case CHECKPOINT_RECORD: {
+                            int tidListSize = raf.readInt();
+                            for (int i = 0; i < tidListSize; i += 1) {
+                                raf.readLong();
+                                raf.readLong();
+                            }
+                            break;
+                        }
+                        default:
+                    }
+                    raf.readLong();
+                }
             }
         }
     }
@@ -482,13 +524,181 @@ public class LogFile {
         committed transactions are installed and that the
         updates of uncommitted transactions are not installed.
     */
+    // There were four types of transactions:
+    // We need to scan from the checkpoints to generate the redo and undo list.
+    // checkPoint: Active transaction List when setting checkpoint. Flush all the dirty pages to disk.
+    // Redo: Transaction commit after the last checkpoint.
+    //       for the same page written request, we need to update the page by the order of log
+    // Undo: Transaction begin but haven't commit or submit.
+    //       for the same page written request, we need to redo the last one, they has the latest copy
+    // The state of transactions are
+    // 1) submit and has been written to disk: no worry
+    // 2) submit and has not been written to disk: redo
+    // but we write log before flush it to disk, so we need to redo them.
+    // 3) abort: has been handel by rollback(), after rollback() we write abort log.
+    // 4) begin, no submit and not abort: undo
+
+
+    public synchronized long getRecoverOffset(){
+        try {
+            raf.seek(0);
+            long checkPoint = raf.readLong();
+            if(checkPoint == -1){
+                return -1L;
+            }else {
+                // 移动到检查点,并略过日志头（type,tid信息）
+                raf.seek(checkPoint);
+                raf.readInt();
+                raf.readLong();
+                int keySize = raf.readInt();
+                long recoverOffset = Long.MAX_VALUE;
+                while (keySize-- > 0) {
+                    raf.readLong();
+                    long offset = raf.readLong();
+                    if(offset < recoverOffset){
+                        recoverOffset = offset;
+                    }
+                }
+                return recoverOffset;
+
+            }
+
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * Recover the database system by ensuring that the updates of
+     * committed transactions are installed and that the
+     * updates of uncommitted transactions are not installed.
+     */
     public void recover() throws IOException {
         synchronized (Database.getBufferPool()) {
             synchronized (this) {
                 recoveryUndecided = false;
-                // some code goes here
+                raf = new RandomAccessFile(logFile, "rw");
+                raf.seek(0);
+                long lastWrittenCheckpoint = raf.readLong();
+                long scanStartOffset = 0;
+                long recoveryStartOffset = Long.MAX_VALUE;
+                Set<Long> UndoTid = new HashSet<>();
+                Set<Long> RedoTid = new HashSet<>();
+                Set<PageId> undoPageIds = new HashSet<>();
+                //
+                if (lastWrittenCheckpoint == NO_CHECKPOINT_ID) {
+                    scanStartOffset = 8;
+                    recoveryStartOffset = 8;
+                } else {
+                    raf.seek(lastWrittenCheckpoint);
+                    int recordType = raf.readInt();
+                    assert(recordType == CHECKPOINT_RECORD);
+                    raf.readLong(); // read -1
+                    int tidListSize = raf.readInt();
+                    for (int i = 0; i < tidListSize; i += 1) {
+                        long tid = raf.readLong();
+                        long offsetOfFirstRecord = raf.readLong();
+                        recoveryStartOffset = Math.min(recoveryStartOffset, offsetOfFirstRecord);
+                        UndoTid.add(tid);
+                    }
+                    if (recoveryStartOffset == Long.MAX_VALUE) {
+                        recoveryStartOffset = 8;
+                    }
+                    raf.readLong();
+                    scanStartOffset = raf.getFilePointer();
+                    // reach the end of CHECKPOINT_RECORD
+                    // scan from here to decide the undo and redo list
+                }
+
+                raf.seek(scanStartOffset);
+
+                while (raf.getFilePointer() < raf.length()) {
+                    int recordType = raf.readInt();
+                    long recordTid = raf.readLong();
+                    switch (recordType) {
+                        case UPDATE_RECORD: {
+                            Page beforeImg = readPageData(raf);
+                            Page afterImg = readPageData(raf);
+                            break;
+                        }
+                        // IF transaction abort, add to UndoLost
+                        // IF transaction commit, add to UndoLost
+                        case ABORT_RECORD: {
+                            UndoTid.remove(recordTid);
+                            break;
+                        }
+                        case COMMIT_RECORD: {
+                            UndoTid.remove(recordTid);
+                            RedoTid.add(recordTid);
+                            break;
+                        }
+                        // IF transaction begins, add to FailTransactionList
+                        case BEGIN_RECORD: {
+                            UndoTid.add(recordTid);
+                            break;
+                        }
+
+                        case CHECKPOINT_RECORD: {
+                            int tidListSize = raf.readInt();
+                            for (int i = 0; i < tidListSize; i += 1) {
+                                raf.readLong();
+                                raf.readLong();
+                            }
+                        }
+                        default:
+                    }
+                    raf.readLong();
+                }
+
+                //we have found the undo list and redo list
+
+                raf.seek(recoveryStartOffset);
+
+                try {
+                    while (raf.getFilePointer() < raf.length()) {
+                        int recordType = raf.readInt();
+                        long recordTid = raf.readLong();
+                        switch (recordType) {
+                            case UPDATE_RECORD: {
+                                Page beforeImg = readPageData(raf);
+                                Page afterImg = readPageData(raf);
+                                assert(!(RedoTid.contains(recordTid) && UndoTid.contains(recordTid)));
+                                DbFile file = Database.getCatalog().getDatabaseFile(beforeImg.getId().getTableId());
+                                if (RedoTid.contains(recordTid)) {
+                                    file.writePage(afterImg);
+                                } else {
+                                    if (UndoTid.contains(recordTid) && !undoPageIds.contains(beforeImg.getId())) {
+                                        file.writePage(beforeImg);
+                                        undoPageIds.add(beforeImg.getId());
+                                    }
+                                }
+                                break;
+                            }
+                            case ABORT_RECORD: {
+                                break;
+                            }
+                            case COMMIT_RECORD: {
+                                break;
+                            }
+                            case BEGIN_RECORD: {
+                                break;
+                            }
+                            case CHECKPOINT_RECORD: {
+                                int tidListSize = raf.readInt();
+                                for (int i = 0; i < tidListSize; i += 1) {
+                                    raf.readLong();
+                                    raf.readLong();
+                                }
+                            }
+                            default:
+                        }
+                        raf.readLong();
+                    }
+                } catch (EOFException e) {
+                    // DO NOTHING HERE
+                }
             }
-         }
+        }
     }
 
     /** Print out a human readable represenation of the log */
@@ -567,7 +777,7 @@ public class LogFile {
         raf.seek(curOffset);
     }
 
-    public  synchronized void force() throws IOException {
+    public synchronized void force() throws IOException {
         raf.getChannel().force(true);
     }
 

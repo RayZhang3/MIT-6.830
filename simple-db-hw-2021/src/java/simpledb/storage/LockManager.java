@@ -310,6 +310,19 @@ public class LockManager {
                         addLock(tid,newlock);
                         return newlock;
                     }
+                    if (allWait(list)) {
+                        PageLock pageLock = hasRecord(tid, pid);
+                        for (int i = 0; i < list.size(); i += 1) {
+                            if (list.get(i).equals(pageLock)) {
+                                list.remove(pageLock);
+                                removeLock(tid, pageLock);
+                            }
+                        }
+                        PageLock newLock = new PageLock(tid, pid, perm);
+                        list.add(0, newLock);
+                        addLock(tid, newLock);
+                        return newLock;
+                    }
                     break;
                 }
             }

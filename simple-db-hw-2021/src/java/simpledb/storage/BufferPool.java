@@ -273,7 +273,15 @@ public class BufferPool {
             List<PageId> PageIds = this.lockManager.transactionPageIds(tid);
             if (commit) {
                 try {
-                    flushPages(tid);
+                    for (PageId pid: PageIds) {
+                        if (PagesMap.containsKey(pid)) {
+                            Page targetPage = PagesMap.get(pid).getPage();
+                            // use current page contents as the before-image
+                            // for the next transaction that modifies this page.
+                            flushPage(pid);
+                            targetPage.setBeforeImage();
+                        }
+                    }
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -281,6 +289,9 @@ public class BufferPool {
                 //restore the dirty page to its on-disk state
                 if (PageIds != null){
                     for (PageId pid: PageIds) {
+                        if (!PagesMap.containsKey(pid)) {
+                            continue;
+                        }
                         DlinkedNode dirtyNode = PagesMap.get(pid);
                         Page dirtyPage = dirtyNode.getPage();
                         if (dirtyPage != null &&  dirtyPage.isDirty() != null && dirtyPage.isDirty().equals(tid)) {
@@ -383,6 +394,14 @@ public class BufferPool {
     private synchronized void flushPage(PageId pid) throws IOException {
         if (PagesMap.containsKey(pid)){
             Page targetPage = PagesMap.get(pid).getPage();
+            // append an update record to the log, with
+            // a before-image and after-image.
+            TransactionId dirtier = targetPage.isDirty();
+            if (dirtier != null){
+                Database.getLogFile().logWrite(dirtier, targetPage.getBeforeImage(), targetPage);
+                Database.getLogFile().force();
+            }
+
             if (targetPage.isDirty() != null) {
                 DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
                 file.writePage(targetPage);
@@ -403,6 +422,9 @@ public class BufferPool {
                 Page page = PagesMap.get(pid).getPage();
                 if (page.isDirty() != null && page.isDirty().equals(tid)) {
                     flushPage(pid);
+                    // use current page contents as the before-image
+                    // for the next transaction that modifies this page.
+                    page.setBeforeImage();
                 }
             }
         }
