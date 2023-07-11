@@ -28,7 +28,6 @@ import static org.junit.Assert.assertTrue;
  * @Threadsafe, all fields are final
  */
 public class BufferPool {
-    public List<Long> cycleTransaction;
     /** Bytes per page, including header. */
     private static final int DEFAULT_PAGE_SIZE = 4096;
 
@@ -43,14 +42,12 @@ public class BufferPool {
     Map<PageId, DlinkedNode> PagesMap;
     DlinkedNode sentinel;
     DlinkedNode endSentinel;
+    // Lab 4
     private static LockManager lockManager;
-    private static WaitForGraph waitForGraph;
     public LockManager getLockManager() {
         return lockManager;
     }
-    public WaitForGraph getWaitForGraph() {
-        return waitForGraph;
-    }
+    // Lab 4 End
     private class DlinkedNode {
         PageId pid;
         Page page;
@@ -103,8 +100,9 @@ public class BufferPool {
          this.endSentinel = new DlinkedNode();
          this.sentinel.next = endSentinel;
          this.endSentinel.prev = sentinel;
+         // Lab 4
          this.lockManager = new LockManager();
-         this.waitForGraph = new WaitForGraph();
+         // End of Lab 4
     }
     
     public static int getPageSize() {
@@ -138,75 +136,10 @@ public class BufferPool {
      */
     public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        // some code goes here
-
-        boolean AccessPermission = false;
-            while (!AccessPermission) {
-                String processName = Thread.currentThread().getName();
-                // print thread information
-                //System.out.print(processName + " want to get new Page " + pid.getTableId() + "." + pid.getPageNumber() + " in tid: " + tid.getId());
-                LockManager.PageLock pageLock = getLockManager().grantLock(tid, pid, perm);
-                if (pageLock != null) {
-                    switch (pageLock.lockType) {
-                        case EXCLUSIVE_LOCK: {
-                            AccessPermission = true;
-                            break;
-                        }
-                        case SHARED_LOCK: {
-                            if (perm == Permissions.READ_ONLY) {
-                                AccessPermission = true;
-                            }
-                            break;
-                        }
-                        case WAITING: {
-                            LockManager.PageLock lock = getLockManager().grantLock(tid, pid, perm);
-                            if (lock == null) {
-                                try {
-                                    String thisprocessName = Thread.currentThread().getName();
-                                    // print thread information
-                                    //System.out.print(", and fail, so ");
-                                    //System.out.println(thisprocessName + " waits");
-                                    this.wait();
-                                } catch (InterruptedException e){
-                                    e.printStackTrace();
-                                }
-                            }
-                            switch(lock.lockType) {
-                                case EXCLUSIVE_LOCK : {
-                                    AccessPermission = true;
-                                    break;
-                                }
-                                case SHARED_LOCK: {
-                                    AccessPermission = (perm == Permissions.READ_ONLY);
-                                    break;
-                                }
-                                case WAITING:{
-                                    try {
-                                        String thisprocessName = Thread.currentThread().getName();
-                                        // print thread information
-                                        //System.out.print(", and fail, so ");
-                                        //System.out.println(thisprocessName + " waits");
-                                        this.wait();
-                                    } catch (InterruptedException e){
-                                        e.printStackTrace();
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            /*
-            if (cycleTransaction != null) {
-                if (cycleTransaction.contains(tid.getId())) {
-                    cycleTransaction.remove(tid);
-                    transactionComplete(tid, false);
-                }
-            }
-             */
-            //System.out.println(", and success");
-            assertTrue(AccessPermission);
-
+        if (!this.getLockManager().acquireLock(tid, pid, perm)) {
+            System.out.println("Fail to acquire lock");
+            throw new TransactionAbortedException();
+        }
             if (PagesMap.containsKey(pid)) {
                 DlinkedNode node = PagesMap.get(pid);
                 moveToFirst(node);
@@ -221,14 +154,9 @@ public class BufferPool {
                 DlinkedNode node = new DlinkedNode(pid, page, null, null);
                 addHeadNode(node);
                 PagesMap.put(pid, node);
-
                 return node.getPage();
             }
 
-    }
-
-    private boolean isPageLocked(PageId pid) {
-        return this.lockManager.isPageLocked(pid);
     }
 
 
@@ -241,8 +169,8 @@ public class BufferPool {
      * @param tid the ID of the transaction requesting the unlock
      * @param pid the ID of the page to unlock
      */
-    public  void unsafeReleasePage(TransactionId tid, PageId pid) {
-        this.lockManager.releaseLock(tid, pid);
+    public void unsafeReleasePage(TransactionId tid, PageId pid) {
+        this.lockManager.unsafeReleasePage(tid, pid);
     }
 
     /**
@@ -252,11 +180,6 @@ public class BufferPool {
      */
     public void transactionComplete(TransactionId tid) {
         transactionComplete(tid, true);
-    }
-
-    /** Return true if the specified transaction has a lock on the specified page */
-    public boolean holdsLock(TransactionId tid, PageId p) {
-        return this.lockManager.hasLock(tid, p);
     }
 
     /**
@@ -270,47 +193,19 @@ public class BufferPool {
         String thisprocessName = java.lang.management.ManagementFactory.getRuntimeMXBean().getName();
         synchronized (this) {
             //List<PageId> PageIds = this.lockManager.transactionRWPageIds(tid);
-            List<PageId> PageIds = this.lockManager.transactionPageIds(tid);
             if (commit) {
                 try {
-                    for (PageId pid: PageIds) {
-                        if (PagesMap.containsKey(pid)) {
-                            Page targetPage = PagesMap.get(pid).getPage();
-                            // use current page contents as the before-image
-                            // for the next transaction that modifies this page.
-                            flushPage(pid);
-                            targetPage.setBeforeImage();
-                        }
-                    }
+                    flushPages(tid);
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
             } else {
-                //restore the dirty page to its on-disk state
-                if (PageIds != null){
-                    for (PageId pid: PageIds) {
-                        if (!PagesMap.containsKey(pid)) {
-                            continue;
-                        }
-                        DlinkedNode dirtyNode = PagesMap.get(pid);
-                        Page dirtyPage = dirtyNode.getPage();
-                        if (dirtyPage != null &&  dirtyPage.isDirty() != null && dirtyPage.isDirty().equals(tid)) {
-                            DbFile file = Database.getCatalog().getDatabaseFile(dirtyPage.getId().getTableId());
-                            Page newPage = file.readPage(dirtyPage.getId());
-                            newPage.markDirty(false, null);
-                            DlinkedNode newNode = new DlinkedNode(pid, newPage, null, null);
-                            deleteNode(dirtyNode);
-                            addHeadNode(newNode);
-                            PagesMap.remove(pid);
-                            PagesMap.put(pid, newNode);
-                        }
-                    }
-                }
+                // restore the dirty page to its on-disk state
+                restorePages(tid);
             }
             this.lockManager.releaseLock(tid);
             // print thread information
             // System.out.println(thisprocessName + " complete " + tid.getId());
-            this.waitForGraph.removeVertex(tid);
             // print thread information
             //System.out.println(thisprocessName + " finished remove Vertex" + tid.getId());
             this.notifyAll();
@@ -318,6 +213,21 @@ public class BufferPool {
 
     }
 
+    public synchronized void restorePages(TransactionId tid) {
+        for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
+            Page page = entry.getValue().getPage();
+            PageId pid = entry.getKey();
+            if (page.isDirty()!= null && page.isDirty().equals(tid)) {
+                DbFile file = Database.getCatalog().getDatabaseFile(page.getId().getTableId());
+                Page newPage = file.readPage(page.getId());
+                newPage.markDirty(false, null);
+                DlinkedNode newNode = new DlinkedNode(pid, newPage, null, null);
+                deleteNode(entry.getValue());
+                addHeadNode(newNode);
+                PagesMap.put(pid, newNode);
+            }
+        }
+    }
     /**
      * Add a tuple to the specified table on behalf of transaction tid.  Will
      * acquire a write lock on the page the tuple is added to and any other 
@@ -413,21 +323,17 @@ public class BufferPool {
     /** Write all pages of the specified transaction to disk.
      */
     public synchronized void flushPages(TransactionId tid) throws IOException {
-        List<PageId> RWPageIds= this.lockManager.transactionRWPageIds(tid);
-        if (RWPageIds == null) {
-            return;
-        }
-        for (PageId pid: RWPageIds) {
-            if (this.PagesMap.containsKey(pid)) {
-                Page page = PagesMap.get(pid).getPage();
-                if (page.isDirty() != null && page.isDirty().equals(tid)) {
-                    flushPage(pid);
-                    // use current page contents as the before-image
-                    // for the next transaction that modifies this page.
-                    page.setBeforeImage();
-                }
+        for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
+            Page page = entry.getValue().getPage();
+            PageId pid = entry.getKey();
+            if (page.isDirty() != null && page.isDirty().equals(tid)) {
+                flushPage(pid);
+                // use current page contents as the before-image
+                // for the next transaction that modifies this page.
+                page.setBeforeImage();
             }
         }
+
     }
 
     private synchronized DlinkedNode findEvictedPage() throws DbException {
@@ -457,7 +363,6 @@ public class BufferPool {
             flushPage(pid);
             deleteNode(node);
             PagesMap.remove(pid);
-            this.lockManager.releaseLock(pid);
         } catch (IOException e) {
             e.printStackTrace();
         }
