@@ -134,12 +134,34 @@ public class BufferPool {
      * @param pid the ID of the requested page
      * @param perm the requested permissions on the page
      */
-    public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
+    public Page getPage(TransactionId tid, PageId pid, Permissions perm)
+    //public synchronized Page getPage(TransactionId tid, PageId pid, Permissions perm)
         throws TransactionAbortedException, DbException {
-        if (!this.getLockManager().acquireLock(tid, pid, perm)) {
-            System.out.println("Fail to acquire lock");
-            throw new TransactionAbortedException();
+        long start = System.currentTimeMillis();
+        boolean acquired = false;
+        int retry = 0;
+        while (!acquired) {
+                // System.out.println("Fail to acquire lock");
+            try {
+                acquired = this.getLockManager().acquireLock(tid, pid, perm);
+                retry++;
+                /*
+                if (!acquired) {
+                    Thread.sleep(50);
+                }
+
+                 */
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+            long now = System.currentTimeMillis();
+            if (!acquired && now - start > 300 || retry > 3) {
+                // System.out.println("Time out, abort");
+                throw new TransactionAbortedException();
+            }
         }
+        synchronized (this) {
+            // System.out.println("Exec operation");
             if (PagesMap.containsKey(pid)) {
                 DlinkedNode node = PagesMap.get(pid);
                 moveToFirst(node);
@@ -156,7 +178,7 @@ public class BufferPool {
                 PagesMap.put(pid, node);
                 return node.getPage();
             }
-
+        }
     }
 
 
@@ -376,7 +398,7 @@ public class BufferPool {
                 DlinkedNode oldNode = PagesMap.get(page.getId());
                 DlinkedNode newNode = new DlinkedNode(page.getId(), page, null, null);
                 deleteNode(oldNode);
-                PagesMap.remove(oldNode);
+                PagesMap.remove(oldNode.getPageId());
                 addHeadNode(newNode);
                 PagesMap.put(newNode.getPageId(), newNode);
             } else {

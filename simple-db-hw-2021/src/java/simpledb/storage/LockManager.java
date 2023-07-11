@@ -205,11 +205,10 @@ public class LockManager {
                     while (iterator.hasNext()) {
                         PageLock lock = iterator.next();
                         if (lock.tid.equals(tid)) {
-                            iterator.remove();
-                            System.out.println("remove shared lock");
+                            lock.type = LockType.EXCLUSIVE_LOCK;
+                            // System.out.println("upgrade shared lock");
                         }
                     }
-                    lockList.add(new PageLock(tid, LockType.EXCLUSIVE_LOCK));
                 } else {
                     pidToLocks.get(pid).add(new PageLock(tid, LockType.EXCLUSIVE_LOCK));
                 }
