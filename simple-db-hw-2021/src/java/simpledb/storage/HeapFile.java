@@ -140,10 +140,14 @@ public class HeapFile implements DbFile {
             HeapPageId pid = new HeapPageId(this.getId(), i);
             page = (HeapPage) Database.getBufferPool().getPage(tid, pid, Permissions.READ_WRITE);
             if (page.getNumEmptySlots() > 0) {
+                page.markDirty(true, tid);
                 page.insertTuple(t);
                 List<Page> pages = new ArrayList<>();
                 pages.add(page);
                 return pages;
+            } else {
+                // Lab4
+                Database.getBufferPool().unsafeReleasePage(tid, pid);
             }
         }
         // if all the pages have no empty slots
@@ -151,9 +155,13 @@ public class HeapFile implements DbFile {
         HeapPageId newPid = new HeapPageId(this.getId(), numPages());
         HeapPage appendPage = new HeapPage(newPid, pageData);
 
-        writePage(appendPage); // write page before inserting the tuple
-        appendPage.insertTuple(t);
 
+        writePage(appendPage); // write page before inserting the tuple
+
+
+        appendPage = (HeapPage) Database.getBufferPool().getPage(tid, newPid, Permissions.READ_WRITE);
+        page.markDirty(true, tid);
+        appendPage.insertTuple(t);
         //writePage(appendPage); // write page
         List<Page> pages = new ArrayList<>();
         pages.add(appendPage);
@@ -172,6 +180,7 @@ public class HeapFile implements DbFile {
         }
         HeapPage page = (HeapPage) Database.getBufferPool().getPage(tid, t.getRecordId().getPageId(), Permissions.READ_WRITE);
         try {
+            page.markDirty(true, tid);
             page.deleteTuple(t);
         } catch (DbException e) {
             e.printStackTrace();

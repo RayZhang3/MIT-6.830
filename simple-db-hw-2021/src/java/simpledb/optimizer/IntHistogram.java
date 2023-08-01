@@ -65,6 +65,7 @@ public class IntHistogram {
             ntups += num;
         }
         return (h * 1.0 / ( (int) this.width + 1)) / (ntups * 1.0);
+        //return (h * 1.0 / ( (int) this.width)) / (ntups * 1.0);
         //return (h * 1.0 / this.width) / (ntups * 1.0);
     }
 

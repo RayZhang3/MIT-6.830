@@ -8,6 +8,7 @@ import simpledb.transaction.TransactionId;
 import javax.xml.crypto.Data;
 import java.io.*;
 
+import java.util.Hashtable;
 import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
@@ -94,7 +95,7 @@ public class BufferPool {
      * @param numPages maximum number of pages in this buffer pool.
      */
     public BufferPool(int numPages) {
-         this.PagesMap = new ConcurrentHashMap<>();
+         this.PagesMap = new Hashtable<>();
          this.numPages = numPages;
          this.sentinel = new DlinkedNode();
          this.endSentinel = new DlinkedNode();
@@ -336,6 +337,8 @@ public class BufferPool {
 
             if (targetPage.isDirty() != null) {
                 DbFile file = Database.getCatalog().getDatabaseFile(pid.getTableId());
+                //Database.getLogFile().logWrite(targetPage.isDirty(), targetPage.getBeforeImage(), targetPage);
+                //Database.getLogFile().force();
                 file.writePage(targetPage);
                 targetPage.markDirty(false, null);
             }
@@ -348,11 +351,12 @@ public class BufferPool {
         for (Map.Entry<PageId, DlinkedNode> entry: PagesMap.entrySet()) {
             Page page = entry.getValue().getPage();
             PageId pid = entry.getKey();
+            page.setBeforeImage();
             if (page.isDirty() != null && page.isDirty().equals(tid)) {
                 flushPage(pid);
                 // use current page contents as the before-image
                 // for the next transaction that modifies this page.
-                page.setBeforeImage();
+                // page.setBeforeImage();
             }
         }
 
@@ -369,7 +373,6 @@ public class BufferPool {
                 node = node.prev;
             }
         }
-        assertTrue(node != null);
         throw new DbException("All pages are dirty!");
     }
 

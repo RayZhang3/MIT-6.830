@@ -86,7 +86,7 @@ public class HeapPage implements Page {
      * @return the number of bytes in the header of a page in a HeapFile with each tuple occupying tupleSize bytes
      */
     private int getHeaderSize() {
-        return (int) Math.ceil(this.numSlots / 8.0);
+        return (int) Math.ceil(this.numSlots * 1.0 / 8.0);
     }
     
     /** Return a view of this page before it was modified
@@ -272,17 +272,15 @@ public class HeapPage implements Page {
         if (!t.getTupleDesc().equals(td) || getNumEmptySlots() == 0) {
             throw new DbException("The page has no empty slots");
         }
-        int index = -1;
         for (int i = 0; i < getNumTuples(); i += 1) {
             if (!isSlotUsed(i)) {
-                index = i;
-                break;
+                t.setRecordId(new RecordId(pid, i));
+                this.tuples[i] = t;
+                markSlotUsed(i, true);
+                return;
             }
         }
-        t.setRecordId(new RecordId(pid, index));
-        this.tuples[index] = t;
-        markSlotUsed(index, true);
-
+        throw new DbException("The page has no empty slots");
     }
 
     /**
@@ -327,7 +325,9 @@ public class HeapPage implements Page {
         }
         int pageIndex = i / 8;
         int pageOffset = i % 8;
-        return 0 != (header[pageIndex] & (1 << pageOffset));
+        int bitidx = header[pageIndex];
+        return ((bitidx >> pageOffset) & 1) == 1;
+        // return 0 != (header[pageIndex] & (1 << pageOffset));
     }
 
     /**
@@ -339,11 +339,22 @@ public class HeapPage implements Page {
         }
         int pageIndex = i / 8;
         int pageOffset = i % 8;
+        //
+        byte mask = (byte) (1 << pageOffset);
+        if(value){
+            header[pageIndex] |= mask;
+        }else{
+            // 标记为未被使用，更新 1 为 0
+            // 除了该位其他位都是 1 的掩码，也就是该位会与 0 运算, 从而置零
+            header[pageIndex] &= ~mask;
+        }
+        /*
         if (!value) {
             header[pageIndex] = (byte) (header[pageIndex] & ~(0x00 | (byte)1 << pageOffset));
         } else {
             header[pageIndex] = (byte) (header[pageIndex] | (byte) 1 << pageOffset);
         }
+        */
     }
 
     /**
