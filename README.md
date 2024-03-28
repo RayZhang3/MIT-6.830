@@ -10,15 +10,21 @@ Recording Video: https://www.youtube.com/watch?v=F3XGUPll6Qs&list=PLfciLKR3SgqOx
 
 # SimpleDB
 SimpleDB consists of:
-Classes that represent fields, tuples, and tuple schemas;
-Classes that apply predicates and conditions to tuples;
-One or more access methods (e.g., heap files) that store relations on disk and provide a way to iterate through tuples of those relations;
-A collection of operator classes (e.g., select, join, insert, delete, etc.) that process tuples;
-A buffer pool that caches active tuples and pages in memory and handles concurrency control and transactions (neither of which you need to worry about for this lab); and,
-A catalog that stores information about available tables and their schemas.
+1. Classes that represent fields, tuples, and tuple schemas;
+2. Classes that apply predicates and conditions to tuples;
+3. One or more access methods (e.g., heap files) that store relations on disk and provide a way to iterate through tuples of those relations;
+4. A collection of operator classes (e.g., select, join, insert, delete, etc.) that process tuples;
+5. A buffer pool that caches active tuples and pages in memory and handles concurrency control and transactions (neither of which you need to worry about for this lab); and,
+6. A catalog that stores information about available tables and their schemas.
+7. B+ Tree Indices
+8. Queries are built up by chaining a set of operators together into a hand-built query plan
+9. Query optimizer
+    
 In particular, SimpleDB does not have:
-Data types except integers and fixed length strings.
-
+1. Data types except integers and fixed length strings.
+2. Views.
+3. a SQL front end or parser that allows you to type queries directly into SimpleDB
+4. 
 # Lab1
 ## Goals
 1. Implement the classes to manage tuples, namely Tuple, TupleDesc. We have already implemented Field, IntField, StringField, and Type for you. Since you only need to support integer and (fixed length) string fields and fixed length tuples, these are straightforward.
