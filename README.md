@@ -1,12 +1,14 @@
 # MIT 6.830
 Course Schedule: http://db.lcs.mit.edu/6.5830/2021/assign.php
+
 Recording Video: https://www.youtube.com/watch?v=F3XGUPll6Qs&list=PLfciLKR3SgqOxCy1TIXXyfTqKzX2enDjK
-[Lab1](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab1.md)
-[Lab2](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab2.md)
-[Lab3](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab3.md)
-[Lab4](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab4.md)
-[Lab5](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab5.md)
-[Lab6](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab6.md)
+
+Lab Links: [Lab1](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab1.md) 
+[Lab2](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab2.md) 
+[Lab3](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab3.md) 
+[Lab4](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab4.md) 
+[Lab5](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab5.md) 
+[Lab6](https://github.com/MIT-DB-Class/simple-db-hw-2021/blob/master/lab6.md) 
 
 # SimpleDB
 SimpleDB consists of:
